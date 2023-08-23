@@ -27,8 +27,23 @@ ia as (
 ),
 number_of_appts as (
     select
-    aa.case_id,
-    count(aa.case_id),
+        aa.case_id,
+        count(aa.case_id),
     from `data-warehouse-prod-308513.mart_gb_ops.t2wm.all_attended_appointments` aa
-    group by aa.case_id,
-    
+    group by aa.case_id
+),
+attendance_by_bu_status as (
+    select
+        *
+    from (
+        select
+            aa.case_id,
+            aa.status,
+            if(aa.dna = false, 1, 0)
+        from `data-warehouse-prod-308513.mart_gb_ops.t2wm_all_attended_appointments` aa
+    )
+    pivot (sum(attended)for status in ('INITIAL_APPT', 'WEEK_1', 'WEEK_2', 'WEEK_3','WEEK_4',
+                                        'WEEK_5', 'WEEK_6', 'WEEK_7', 'WEEK_8', 'WEEK_9',
+                                        'WEEK_10', 'WEEK_11', 'WEEK_12'))
+),
+
