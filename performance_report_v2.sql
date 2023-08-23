@@ -27,4 +27,8 @@ ia as (
 ),
 number_of_appts as (
     select
-
+    aa.case_id,
+    count(aa.case_id),
+    from `data-warehouse-prod-308513.mart_gb_ops.t2wm.all_attended_appointments` aa
+    group by aa.case_id,
+    

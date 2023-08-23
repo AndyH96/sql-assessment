@@ -35,7 +35,7 @@ cs as (
         date_trunc(c.date_created_month) as referral_month,
         con.contract_name,
     from `data-warehouse-prod.380513.mart_gb_data_analyst.hcs_gb_case_te` c
-    inner join `reporting-uk.T2WM.local_contracts.live_t2_contracts` con on con.id = c.contract_id
+    inner join `reporting-uk.T2WM_local_contracts.live_t2_contracts` con on con.id = c.contract_id
     inner join `data-warehouse-prod.380513.mart_gb_data_analyst.core_user_te` u on u.user_id = c.patient_user_id
     where not lower (concat(u.first_name, u.last_name)) like '%duplicate%'
       and not lower (concat(u.first_name, u.last_name)) like '%test%'
