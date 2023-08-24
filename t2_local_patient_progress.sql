@@ -21,7 +21,7 @@ with week_boolean as (
 -- count attended appointments and create logic for week 12 and week 9
 weeks_attended as (
     select *,
-        (week1 + week2 + week3 + week4 + week5 + week6 + week7 + week8 + week9 + week10 + week11 + week12 + week2)
+        (week1 + week2 + week3 + week4 + week5 + week6 + week7 + week8 + week9 + week10 + week11 + week12)
         + if(week12_appointments = 1,2 - if(week11 = 1,1,0) - if(week10 = 1,1,0)0)
         + if(week9_appointments  = 1,2 - if(week8  = 1,1,0) - if(week7  = 1,1,0)0)
     weeks_attended
