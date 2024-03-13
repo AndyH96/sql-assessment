@@ -1,51 +1,58 @@
-with week_boolean as (
-    select
-        pe.case_id,
-        pe.patient_user_id,
-        if(week1_engagements  >1, 1, 0) week1,
-        if(week2_engagements  >1, 1, 0) week2,
-        if(week3_engagements  >1, 1, 0) week3,
-        if(week4_engagements  >1, 1, 0) week4,
-        if(week5_engagements  >1, 1, 0) week5,
-        if(week6_engagements  >1, 1, 0) week6,
-        if(week7_engagements  >1, 1, 0) week7,
-        if(week8_engagements  >1, 1, 0) week8,
-        if(week9_engagements  >1, 1, 0) week9,
-        if(week10_engagements  >1, 1, 0) week10,
-        if(week11_engagements  >1, 1, 0) week11,
-        if(week12_engagements  >1, 1, 0) week12,
-        if(week9_appointments  >1, 1, 0) week9_appointments,
-        if(week12_appointments >1, 1, 0) week12_appointments,
-    from `patient_engagement` pe
+WITH engagement_metrics AS (
+    SELECT
+        pe.unique_id AS engagement_id,
+        pe.individual_id,
+        IF(engagement_count_week1 > 1, 1, 0) AS metric_week1,
+        IF(engagement_count_week2 > 1, 1, 0) AS metric_week2,
+        IF(engagement_count_week3 > 1, 1, 0) AS metric_week3,
+        IF(engagement_count_week4 > 1, 1, 0) AS metric_week4,
+        IF(engagement_count_week5 > 1, 1, 0) AS metric_week5,
+        IF(engagement_count_week6 > 1, 1, 0) AS metric_week6,
+        IF(engagement_count_week7 > 1, 1, 0) AS metric_week7,
+        IF(engagement_count_week8 > 1, 1, 0) AS metric_week8,
+        IF(engagement_count_week9 > 1, 1, 0) AS metric_week9,
+        IF(engagement_count_week10 > 1, 1, 0) AS metric_week10,
+        IF(engagement_count_week11 > 1, 1, 0) AS metric_week11,
+        IF(engagement_count_week12 > 1, 1, 0) AS metric_week12,
+        IF(special_appointment_week9 > 1, 1, 0) AS special_week9,
+        IF(special_appointment_week12 > 1, 1, 0) AS special_week12
+    FROM 
+        `engagement_data_table` pe
 ),
--- count attended appointments and create logic for week 12 and week 9
-weeks_attended as (
-    select *,
-        (week1 + week2 + week3 + week4 + week5 + week6 + week7 + week8 + week9 + week10 + week11 + week12)
-        + if(week12_appointments = 1,2 - if(week11 = 1,1,0) - if(week10 = 1,1,0)0)
-        + if(week9_appointments  = 1,2 - if(week8  = 1,1,0) - if(week7  = 1,1,0)0)
-    weeks_attended
-    from week_boolean
+attendance_summary AS (
+    SELECT
+        *,
+        (metric_week1 + metric_week2 + metric_week3 + metric_week4 + metric_week5 + 
+         metric_week6 + metric_week7 + metric_week8 + metric_week9 + metric_week10 + 
+         metric_week11 + metric_week12) + 
+         IF(special_week12 = 1, 2 - IF(metric_week11 = 1, 1, 0) - IF(metric_week10 = 1, 1, 0), 0) + 
+         IF(special_week9 = 1, 2 - IF(metric_week8 = 1, 1, 0) - IF(metric_week7 = 1, 1, 0), 0) AS total_attendance
+    FROM 
+        engagement_metrics
 ),
-cs as (
-    select 
-        c.id as case_id,
-        c.patient_user_id,
-        c.date_created as referral_date,
-        date_trunc(c.date_created_month) as referral_month,
-        con.contract_name,
-    from `case_te` c
-    inner join `contracts` con on con.id = c.contract_id
-    inner join `user_te` u on u.user_id = c.patient_user_id
-    where not lower (concat(u.first_name, u.last_name)) like '%duplicate%'
-      and not lower (concat(u.first_name, u.last_name)) like '%test%'
-      and not lower (u.email) like '@oviva.com' or u.email is null)
+consolidated_summary AS (
+    SELECT 
+        c.unique_id AS summary_id,
+        c.individual_id,
+        c.creation_date AS referral_date,
+        DATE_TRUNC('month', c.creation_date) AS referral_month,
+        con.contract_identifier
+    FROM 
+        `case_summary_table` c
+        INNER JOIN `contract_table` con ON con.unique_id = c.contract_id
+        INNER JOIN `user_summary_table` u ON u.unique_id = c.individual_id
+    WHERE 
+        NOT LOWER(CONCAT(u.name_first, u.name_last)) LIKE '%duplicate%'
+        AND NOT LOWER(CONCAT(u.name_first, u.name_last)) LIKE '%test%'
+        AND (NOT LOWER(u.contact_email) LIKE '%example.com' OR u.contact_email IS NULL)
 )
 
-select 
-    weeks_attended.*,
-    contract_name,
+SELECT 
+    attendance_summary.*,
+    contract_identifier,
     referral_date,
-    referral_month,
-from cs
-inner join weeks_attended as wa on wa.case_id = cs.case_id
+    referral_month
+FROM 
+    consolidated_summary
+    INNER JOIN attendance_summary ON attendance_summary.engagement_id = consolidated_summary.summary_id
+
