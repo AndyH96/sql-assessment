@@ -1,94 +1,97 @@
-with people as (
-    select 
-        con.contract_name,
-        u.user_id,
-        c.id,
-        c.date_created,
-        date_trunc(c.date_created, MONTH)
-        c.state,
-    from `case_te` c
-    inner join `contract_te` con
-    inner join `user_te` u
-    where not lower (concat(u.first_name, u.last_name)) like '%duplicate%'
-    and not lower (concat(u.first_name, u.last_name)) like '%test%'
-    and not lower (u.email) like '@sample.com' or u.email is null
+WITH participant_contracts AS (
+    SELECT 
+        con.contract_identifier AS contract_type,
+        u.unique_identifier AS user_reference,
+        c.case_reference,
+        c.creation_timestamp,
+        DATE_TRUNC('month', c.creation_timestamp) AS creation_month,
+        c.current_status
+    FROM 
+        `cases` c
+        INNER JOIN `contracts` con ON con.id = c.contract_id
+        INNER JOIN `participants` u ON u.id = c.user_id
+    WHERE 
+        NOT LOWER(CONCAT(u.first_name_masked, u.last_name_masked)) LIKE '%duplicate%'
+        AND NOT LOWER(CONCAT(u.first_name_masked, u.last_name_masked)) LIKE '%test%'
+        AND (NOT LOWER(u.email_masked) LIKE '%example.com' OR u.email_masked IS NULL)
 ),
-ia as (
-    select 
-        ch.case_id,
-        min(ch.date_created)
-    from people
-    left join `case_history_te` ch
-    where ch.state_after = 'TREATMENT_PENDING'
-    group by ch.case_id
+initial_engagement AS (
+    SELECT 
+        ch.case_reference,
+        MIN(ch.timestamp) AS initial_engagement_date
+    FROM 
+        participant_contracts
+        LEFT JOIN `case_history` ch ON ch.case_reference = participant_contracts.case_reference
+    WHERE 
+        ch.next_status = 'Awaiting Treatment'
+    GROUP BY 
+        ch.case_reference
 ),
-number_of_appts as (
-    select
-        aa.case_id,
-        count(aa.case_id),
-    from `attended_appointments` aa
-    group by aa.case_id
+appointment_counts AS (
+    SELECT
+        aa.case_reference,
+        COUNT(aa.case_reference) AS total_appointments
+    FROM 
+        `appointments` aa
+    GROUP BY 
+        aa.case_reference
 ),
-attendance_by_bu_status as (
-    select
-        *
-    from (
-        select
-            aa.case_id,
-            aa.status,
-            if(aa.dna = false, 1, 0)
-        from `attended_appointments` aa
+status_summary AS (
+    SELECT
+        aa.case_reference,
+        aa.encounter_status,
+        IF(aa.no_show = false, 1, 0) AS attended
+    FROM 
+        `appointments` aa
+    PIVOT (
+        SUM(attended) FOR encounter_status IN ('Initial', 'Week1', 'Week2', 'Week3', 'Week4',
+                                               'Week5', 'Week6', 'Week7', 'Week8', 'Week9',
+                                               'Week10', 'Week11', 'Week12')
     )
-    pivot (sum(attended)for status in ('INITIAL_APPT', 'WEEK_1', 'WEEK_2', 'WEEK_3','WEEK_4',
-                                        'WEEK_5', 'WEEK_6', 'WEEK_7', 'WEEK_8', 'WEEK_9',
-                                        'WEEK_10', 'WEEK_11', 'WEEK_12'))
 ),
-pathways as (   
-    select 
-        p.case_id,
-        p.pathway,
-        row_number()over(partition by p.case_id) order by p._dwh_last_update desc
-    from `case_pathways` 
+pathway_analysis AS (   
+    SELECT 
+        p.case_reference,
+        p.pathway_type,
+        ROW_NUMBER() OVER(PARTITION BY p.case_reference ORDER BY p.last_update DESC)
+    FROM 
+        `pathway_info` p
 ),
-appts_adjusted as (
-    select
-        p.* except(pathway),
-        ia.enrolment_date,
-        number_of_appts.number_of_appts_attended,
-        attendance_by_bu_status.WEEK_9,
-        attendance_by_bu_status.WEEK_12,
-        if(ia.enrolment_date is null, false, true) enrolled,
-        if(ifnull(number_of_appts.number_of_appts_attended,0) > 0, true false) participant,
-        case
-        -- if level 1 use engagement + appointment combo from patient progress table
-            when if (p.pathway,most_recent_pathway.pathway) in ('Level 1',
-                                                                'Level 1 App',
-                                                                'Level 1 Phone')
-        then pp.weeks_attended
-        -- level 2/3 keep adjustments for week 9 and 12 but also inclide extra week for 20 min phone calls (tracking changed from 2x10 to 1x20)
-        else
-        -- if attended week 9 backfill for week 8 and 7. If attended week 8 or 7 subtract appointments to avoid over counting
-            number_of_appts.number_of_appts_attended
-            + ifnull(ppath.extra_appointments,0) -- add extra for phone pathway, return 0 if not phone.
-            + if null(attendance_by_bu_status.WEEK_9 > 0, 2  - if(attendance_by_bu_status.WEEK_8 >1, 1, 0)   - if(attendance_by_bu_status.WEEK_7 >1, 1, 0) 
-            + if null(attendance_by_bu_status.WEEK_12 > 0, 2 - if(attendance_by_bu_status.WEEK_11 >1, 1, 0) - if(attendance_by_bu_status.WEEK_10 >1, 1, 0) 
-        end as number_of_appts_attended_adjusted,
-        ifnull (p.pathway, most_recent_pathway.pathway) as pathway
-    from phe_t2_patients as p 
-    left join ia
-    left join number_of_appts
-    left join attendance_by_bu_status
-    left join `patient_progress`
-    left join phone pathway
+adjusted_appointments AS (
+    SELECT
+        pa.case_reference,
+        ie.initial_engagement_date,
+        ac.total_appointments,
+        ss.Week9,
+        ss.Week12,
+        IF(ie.initial_engagement_date IS NULL, false, true) AS has_engaged,
+        IF(IFNULL(ac.total_appointments,0) > 0, true, false) AS has_participated,
+        CASE
+            WHEN pa.pathway_type IN ('Type1', 'Type1App', 'Type1Phone') THEN
+                patient_progress.metrics
+            ELSE
+                ac.total_appointments
+                + IFNULL(patient_progress.extra_sessions,0)
+                + IFNULL(ss.Week9 > 0, 2 - IF(ss.Week8 > 1, 1, 0) - IF(ss.Week7 > 1, 1, 0))
+                + IFNULL(ss.Week12 > 0, 2 - IF(ss.Week11 > 1, 1, 0) - IF(ss.Week10 > 1, 1, 0))
+        END AS total_adjusted_appointments,
+        IFNULL(pa.pathway_type, latest_pathway.pathway_type) AS pathway_classification
+    FROM 
+        `participant_aggregate` pa
+        LEFT JOIN initial_engagement ie ON pa.case_reference = ie.case_reference
+        LEFT JOIN appointment_counts ac ON pa.case_reference = ac.case_reference
+        LEFT JOIN status_summary ss ON pa.case_reference = ss.case_reference
+        LEFT JOIN `progress_tracking`
+        LEFT JOIN pathway_analysis
+)
 
-select 
+SELECT 
     *,
-    case
-        when contract_name in ('Sample1',
-                               'Sample2',
-                               'Sample3',
-                               'Sample4')
-        and number_of_appts_attended_adjusted >= 8 then true
-        else if(number_of_appts_attended_adjusted >= 9, true false)
-        end as completed
-from appts_adjusted
+    CASE
+        WHEN contract_type IN ('ContractA', 'ContractB', 'ContractC', 'ContractD')
+             AND total_adjusted_appointments >= 8 THEN true
+        ELSE IF(total_adjusted_appointments >= 9, true, false)
+    END AS completion_status
+FROM 
+    adjusted_appointments
+
